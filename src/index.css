@@ -1,0 +1,119 @@
+@import "tailwindcss";
+
+@layer base {
+  :root {
+    --color-gold: #c5a880;
+    --color-gold-light: #dfc285;
+    --color-gold-dark: #94753d;
+    --color-dark-bg: #0a0a0c;
+    --color-dark-surface: #121217;
+    --color-dark-card: #181820;
+    --color-dark-border: #262633;
+  }
+
+  body {
+    background-color: var(--color-dark-bg);
+    color: #e2e8f0;
+    font-family: 'Montserrat', system-ui, -apple-system, sans-serif;
+    overflow-x: hidden;
+  }
+
+  h1, h2, h3, .font-serif {
+    font-family: 'Cinzel', 'Playfair Display', Georgia, serif;
+    letter-spacing: 0.04em;
+  }
+
+  .font-display {
+    font-family: 'Oswald', sans-serif;
+    letter-spacing: 0.05em;
+    text-transform: uppercase;
+  }
+}
+
+/* Custom Scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: #0d0d11;
+}
+::-webkit-scrollbar-thumb {
+  background: #2a2a38;
+  border-radius: 4px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: #c5a880;
+}
+
+/* Vintage Barbershop Gold Effects */
+.gold-text-gradient {
+  background: linear-gradient(135deg, #ffffff 0%, #ebd4a8 35%, #c5a880 70%, #94753d 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.gold-border-glow {
+  border: 1px solid rgba(197, 168, 128, 0.3);
+  box-shadow: 0 0 15px rgba(197, 168, 128, 0.15);
+}
+
+.gold-border-glow:hover {
+  border-color: rgba(197, 168, 128, 0.6);
+  box-shadow: 0 0 25px rgba(197, 168, 128, 0.3);
+}
+
+/* Vintage Texture Grid / Grain */
+.bg-vintage-grain {
+  background-image: radial-gradient(rgba(197, 168, 128, 0.06) 1px, transparent 0);
+  background-size: 24px 24px;
+}
+
+/* Barber Pole animated stripes */
+@keyframes barberPole {
+  0% {
+    background-position: 0 0;
+  }
+  100% {
+    background-position: 50px 50px;
+  }
+}
+
+.barber-pole-stripes {
+  background: repeating-linear-gradient(
+    45deg,
+    #b91c1c,
+    #b91c1c 10px,
+    #ffffff 10px,
+    #ffffff 20px,
+    #1d4ed8 20px,
+    #1d4ed8 30px,
+    #ffffff 30px,
+    #ffffff 40px
+  );
+  background-size: 56px 56px;
+  animation: barberPole 2.5s linear infinite;
+}
+
+/* Glassmorphism */
+.glass-panel {
+  background: rgba(18, 18, 24, 0.82);
+  backdrop-filter: blur(14px);
+  -webkit-backdrop-filter: blur(14px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+
+.glass-panel-gold {
+  background: rgba(22, 22, 30, 0.88);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(197, 168, 128, 0.25);
+  box-shadow: 0 10px 30px -10px rgba(0, 0, 0, 0.7);
+}
+
+/* Dots leader for vintage menu pricing */
+.dot-leader {
+  flex-grow: 1;
+  border-bottom: 1px dotted rgba(197, 168, 128, 0.35);
+  margin: 0 10px 6px 10px;
+}

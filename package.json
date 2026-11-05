@@ -1,0 +1,48 @@
+{
+  "name": "gravity-barbershop",
+  "version": "1.0.0",
+  "description": "Gravity Barber Lounge - Automation system, modern landing page, interactive calendar, admin dashboard & Telegram Bot",
+  "main": "server/server.js",
+  "type": "module",
+  "scripts": {
+    "server": "node server/server.js",
+    "client": "vite",
+    "build": "vite build",
+    "dev": "concurrently \"node server/server.js\" \"vite\"",
+    "start": "node server/server.js"
+  },
+  "keywords": [
+    "barbershop",
+    "booking",
+    "telegram-bot",
+    "admin-panel",
+    "calendar"
+  ],
+  "author": "Antigravity",
+  "license": "ISC",
+  "dependencies": {
+    "@neondatabase/serverless": "^1.2.0",
+    "@tailwindcss/vite": "^4.1.18",
+    "canvas-confetti": "^1.9.4",
+    "clsx": "^2.1.1",
+    "cors": "^2.8.6",
+    "dotenv": "^18.0.9",
+    "express": "^5.3.0",
+    "lucide-react": "^1.69.0",
+    "node-telegram-bot-api": "^2.3.0",
+    "pg": "^8.23.1",
+    "react": "^19.3.1",
+    "react-dom": "^19.3.1",
+    "tailwind-merge": "^3.7.0"
+  },
+  "devDependencies": {
+    "@types/node": "^26.6.6",
+    "@vitejs/plugin-react": "^6.2.1",
+    "autoprefixer": "^10.6.2",
+    "concurrently": "^10.0.6",
+    "nodemon": "^3.1.14",
+    "postcss": "^8.5.32",
+    "tailwindcss": "^4.3.4",
+    "vite": "^8.3.6"
+  }
+}
