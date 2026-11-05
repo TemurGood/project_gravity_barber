@@ -375,7 +375,11 @@ app.use((req, res, next) => {
   });
 });
 
-app.listen(PORT, () => {
-  console.log(`💈 [Gravity Barbershop Server] Running on http://localhost:${PORT}`);
-  console.log(`💈 API endpoints available at http://localhost:${PORT}/api/`);
-});
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`💈 [Gravity Barbershop Server] Running on http://localhost:${PORT}`);
+    console.log(`💈 API endpoints available at http://localhost:${PORT}/api/`);
+  });
+}
+
+export default app;

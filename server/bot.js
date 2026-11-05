@@ -1,57 +1,86 @@
-import { createRequire } from 'module';
 import { readDb, writeDb } from './db.js';
 
-const require = createRequire(import.meta.url);
-const TelegramBot = require('node-telegram-bot-api');
-
-let botInstance = null;
+let pollingActive = false;
+let pollingOffset = 0;
 let reminderInterval = null;
 const userStates = new Map(); // chat_id -> booking step state
 
-export function getBot() {
-  return botInstance;
+async function tgCall(method, body = {}) {
+  const db = readDb();
+  const token = db.settings.telegramBotToken || process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) throw new Error('Telegram Bot Token не задан');
+
+  const res = await fetch(`https://api.telegram.org/bot${token}/${method}`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body)
+  });
+  return await res.json();
 }
 
 export function initTelegramBot(token, adminChatId) {
   if (!token || token.trim() === '') {
-    console.log('[Telegram Bot] No token provided. Bot will remain idle until token is configured.');
-    if (botInstance) {
-      try { botInstance.stopPolling(); } catch (e) {}
-      botInstance = null;
-    }
-    if (reminderInterval) {
-      clearInterval(reminderInterval);
-      reminderInterval = null;
-    }
+    console.log('[Telegram Bot] No token provided. Bot will remain idle.');
+    pollingActive = false;
+    if (reminderInterval) clearInterval(reminderInterval);
     return null;
   }
 
-  try {
-    if (botInstance) {
-      try { botInstance.stopPolling(); } catch (e) {}
+  console.log('[Telegram Bot] Starting with token for @gravity_barber_bot...');
+  pollingActive = true;
+
+  // Set chat menu button for Telegram Mini App
+  const webAppUrl = process.env.WEBAPP_URL || 'https://gravity-barber.vercel.app';
+  tgCall('setChatMenuButton', {
+    menu_button: {
+      type: 'web_app',
+      text: '💈 Запись онлайн',
+      web_app: { url: webAppUrl }
     }
+  }).catch(e => console.log('Menu button note:', e.message));
 
-    botInstance = new TelegramBot(token.trim(), { polling: true });
-    console.log('[Telegram Bot] Successfully started with polling!');
+  // Start polling loop
+  startLongPolling();
 
-    const webAppUrl = process.env.WEBAPP_URL || 'https://gravity-barber.vercel.app';
+  // Start automated reminders scheduler (checks every 30 seconds)
+  startReminderScheduler();
 
-    // Set persistent Menu Button for Telegram Mini App
+  return true;
+}
+
+async function startLongPolling() {
+  while (pollingActive) {
     try {
-      botInstance.setChatMenuButton({
-        menu_button: {
-          type: 'web_app',
-          text: '💈 Запись онлайн',
-          web_app: { url: webAppUrl }
+      const data = await tgCall('getUpdates', {
+        offset: pollingOffset,
+        timeout: 20,
+        allowed_updates: ['message', 'callback_query']
+      });
+
+      if (data && data.ok && Array.isArray(data.result)) {
+        for (const update of data.result) {
+          pollingOffset = update.update_id + 1;
+          handleUpdate(update).catch(err => console.error('Update processing error:', err.message));
         }
-      }).catch(e => console.log('Notice: Menu button set error (optional):', e.message));
-    } catch (e) {}
+      }
+    } catch (err) {
+      // Avoid spamming logs if network drops
+      await new Promise(r => setTimeout(r, 3000));
+    }
+  }
+}
 
-    // Handle /start
-    botInstance.onText(/\/start/, (msg) => {
-      const chatId = msg.chat.id;
-      const firstName = msg.from?.first_name || 'Джентльмен';
+async function handleUpdate(update) {
+  const webAppUrl = process.env.WEBAPP_URL || 'https://gravity-barber.vercel.app';
 
+  // 1. Message received
+  if (update.message) {
+    const msg = update.message;
+    const chatId = msg.chat.id;
+    const text = (msg.text || '').trim();
+    const firstName = msg.from?.first_name || 'Джентльмен';
+
+    if (text === '/start') {
       const welcomeText = 
 `💈 *Добро пожаловать в GRAVITY BARBERSHOP!* 💈\n\n` +
 `Здравствуйте, *${firstName}*!\n` +
@@ -61,127 +90,114 @@ export function initTelegramBot(token, adminChatId) {
 `🥃 Бесплатный бар, свежесваренный кофе и зона PS5 для каждого гостя.\n\n` +
 `_Вы можете записаться через интерактивный Mini App прямо внутри Telegram или пошагово в чате:_`;
 
-      const keyboard = {
-        inline_keyboard: [
-          [{ text: "🚀 Открыть Mini App (Календарь)", web_app: { url: webAppUrl } }],
-          [{ text: "📅 Записаться прямо в чате", callback_data: "start_booking" }],
-          [
-            { text: "✂️ Услуги и цены", callback_data: "view_services" },
-            { text: "💈 Наши барберы", callback_data: "view_barbers" }
-          ],
-          [
-            { text: "📍 Контакты & Локация", callback_data: "view_contacts" },
-            { text: "📋 Мои записи", callback_data: "my_bookings" }
-          ],
-          [{ text: "🆔 Узнать мой Telegram ID", callback_data: "get_my_id" }]
-        ]
-      };
-
-      botInstance.sendMessage(chatId, welcomeText, {
+      await tgCall('sendMessage', {
+        chat_id: chatId,
+        text: welcomeText,
         parse_mode: 'Markdown',
-        reply_markup: keyboard
+        reply_markup: {
+          inline_keyboard: [
+            [{ text: "🚀 Запустить Mini App (Календарь)", web_app: { url: webAppUrl } }],
+            [{ text: "📅 Записаться прямо в чате", callback_data: "start_booking" }],
+            [
+              { text: "✂️ Услуги и цены", callback_data: "view_services" },
+              { text: "💈 Наши барберы", callback_data: "view_barbers" }
+            ],
+            [
+              { text: "📍 Контакты & Локация", callback_data: "view_contacts" },
+              { text: "📋 Мои записи", callback_data: "my_bookings" }
+            ],
+            [{ text: "🆔 Узнать мой Telegram ID", callback_data: "get_my_id" }]
+          ]
+        }
       });
-    });
+      return;
+    }
 
-    // Handle /id command
-    botInstance.onText(/\/id/, (msg) => {
-      const chatId = msg.chat.id;
+    if (text === '/id') {
       const isGroup = msg.chat.type === 'group' || msg.chat.type === 'supergroup';
       const msgText = isGroup 
         ? `👥 *ID этой группы / чата:* \`${chatId}\`\n\nСкопируйте этот номер и вставьте в поле *Telegram Admin Chat ID* в панели управления барбершопа!`
         : `👤 *Ваш персональный Telegram ID:* \`${chatId}\`\n\nСкопируйте этот номер и вставьте в поле *Telegram Admin Chat ID* в панели управления!`;
 
-      botInstance.sendMessage(chatId, msgText, { parse_mode: 'Markdown' });
-    });
+      await tgCall('sendMessage', {
+        chat_id: chatId,
+        text: msgText,
+        parse_mode: 'Markdown'
+      });
+      return;
+    }
 
-    // Handle /book command
-    botInstance.onText(/\/book/, (msg) => {
-      startBotBooking(msg.chat.id);
-    });
+    if (text === '/book') {
+      startBotBooking(chatId);
+      return;
+    }
 
-    // Handle /app command
-    botInstance.onText(/\/app/, (msg) => {
-      botInstance.sendMessage(msg.chat.id, "Нажмите кнопку ниже, чтобы открыть интерактивный календарь Mini App:", {
+    if (text === '/app') {
+      await tgCall('sendMessage', {
+        chat_id: chatId,
+        text: "Нажмите кнопку ниже, чтобы открыть интерактивный календарь Mini App:",
         reply_markup: {
-          inline_keyboard: [[{ text: "🚀 Запустить Gravity Mini App", web_app: { url: webAppUrl } }]]
+          inline_keyboard: [[{ text: "🚀 Открыть Gravity Mini App", web_app: { url: webAppUrl } }]]
         }
       });
-    });
+      return;
+    }
 
-    // Handle callback queries
-    botInstance.on('callback_query', async (query) => {
-      const chatId = query.message.chat.id;
-      const data = query.data;
-      const messageId = query.message.message_id;
+    // Phone input state
+    const state = userStates.get(chatId);
+    if (state && state.step === 'awaiting_phone') {
+      const phone = msg.contact ? msg.contact.phone_number : text;
+      finishBotBooking(chatId, phone, msg.from?.first_name || 'Гость');
+    }
+  }
 
-      try {
-        await botInstance.answerCallbackQuery(query.id);
+  // 2. Callback query received
+  if (update.callback_query) {
+    const query = update.callback_query;
+    const chatId = query.message.chat.id;
+    const data = query.data;
+    const messageId = query.message.message_id;
 
-        if (data === "start_booking") {
-          startBotBooking(chatId);
-        } else if (data === "view_services") {
-          showServicesList(chatId);
-        } else if (data === "view_barbers") {
-          showBarbersList(chatId);
-        } else if (data === "view_contacts") {
-          showContacts(chatId);
-        } else if (data === "my_bookings") {
-          showUserBookings(chatId, query.from?.id);
-        } else if (data === "get_my_id") {
-          botInstance.sendMessage(chatId, `🆔 *Ваш Telegram Chat ID:* \`${chatId}\`\n\nСкопируйте его для настроек уведомлений.`, { parse_mode: 'Markdown' });
-        } else if (data.startsWith("sel_srv_")) {
-          const serviceId = data.replace("sel_srv_", "");
-          handleServiceSelect(chatId, serviceId);
-        } else if (data.startsWith("sel_barber_")) {
-          const barberId = data.replace("sel_barber_", "");
-          handleBarberSelect(chatId, barberId);
-        } else if (data.startsWith("sel_date_")) {
-          const dateStr = data.replace("sel_date_", "");
-          handleDateSelect(chatId, dateStr);
-        } else if (data.startsWith("sel_time_")) {
-          const timeStr = data.replace("sel_time_", "");
-          handleTimeSelect(chatId, timeStr);
-        } else if (data.startsWith("admin_confirm_")) {
-          const bookingId = data.replace("admin_confirm_", "");
-          updateBookingStatus(bookingId, "confirmed", chatId, messageId);
-        } else if (data.startsWith("admin_cancel_")) {
-          const bookingId = data.replace("admin_cancel_", "");
-          updateBookingStatus(bookingId, "cancelled", chatId, messageId);
-        }
-      } catch (err) {
-        console.error('Callback error:', err);
-      }
-    });
+    await tgCall('answerCallbackQuery', { callback_query_id: query.id });
 
-    // Handle user contact or phone message in booking state
-    botInstance.on('message', (msg) => {
-      if (msg.text && msg.text.startsWith('/')) return;
-      const chatId = msg.chat.id;
-      const state = userStates.get(chatId);
-
-      if (state && state.step === 'awaiting_phone') {
-        const phone = msg.contact ? msg.contact.phone_number : msg.text.trim();
-        finishBotBooking(chatId, phone, msg.from?.first_name || 'Гость');
-      }
-    });
-
-    // Start background automated reminders (every 40 seconds)
-    startReminderScheduler();
-
-    return botInstance;
-  } catch (error) {
-    console.error('[Telegram Bot] Initialization error:', error.message);
-    return null;
+    if (data === "start_booking") {
+      startBotBooking(chatId);
+    } else if (data === "view_services") {
+      showServicesList(chatId);
+    } else if (data === "view_barbers") {
+      showBarbersList(chatId);
+    } else if (data === "view_contacts") {
+      showContacts(chatId);
+    } else if (data === "my_bookings") {
+      showUserBookings(chatId, query.from?.id);
+    } else if (data === "get_my_id") {
+      await tgCall('sendMessage', {
+        chat_id: chatId,
+        text: `🆔 *Ваш Telegram Chat ID:* \`${chatId}\`\n\nСкопируйте его для настроек уведомлений.`,
+        parse_mode: 'Markdown'
+      });
+    } else if (data.startsWith("sel_srv_")) {
+      handleServiceSelect(chatId, data.replace("sel_srv_", ""));
+    } else if (data.startsWith("sel_barber_")) {
+      handleBarberSelect(chatId, data.replace("sel_barber_", ""));
+    } else if (data.startsWith("sel_date_")) {
+      handleDateSelect(chatId, data.replace("sel_date_", ""));
+    } else if (data.startsWith("sel_time_")) {
+      handleTimeSelect(chatId, data.replace("sel_time_", ""));
+    } else if (data.startsWith("admin_confirm_")) {
+      updateBookingStatus(data.replace("admin_confirm_", ""), "confirmed", chatId, messageId);
+    } else if (data.startsWith("admin_cancel_")) {
+      updateBookingStatus(data.replace("admin_cancel_", ""), "cancelled", chatId, messageId);
+    }
   }
 }
 
-// Background scheduler for automated reminders (60 min & 5 min before appointment)
+// Background scheduler for automated reminders
 function startReminderScheduler() {
   if (reminderInterval) clearInterval(reminderInterval);
 
   reminderInterval = setInterval(() => {
     try {
-      if (!botInstance) return;
       const db = readDb();
       const now = new Date();
       const todayStr = now.toISOString().split('T')[0];
@@ -193,7 +209,6 @@ function startReminderScheduler() {
         if (booking.status === 'cancelled') return;
         if (booking.date !== todayStr) return;
 
-        // Parse booking time e.g. "14:30"
         const [h, m] = (booking.time || "00:00").split(':').map(Number);
         const bookingMinutes = h * 60 + m;
         const diffMinutes = bookingMinutes - currentMinutesNow;
@@ -215,7 +230,7 @@ function startReminderScheduler() {
 `📍 *Адрес:* ул. Большая Бронная, 14 (м. Пушкинская)\n\n` +
 `Свежесваренный авторский кофе и бар уже ждут вас!`;
 
-          botInstance.sendMessage(targetChatId, msg60, { parse_mode: 'Markdown' })
+          tgCall('sendMessage', { chat_id: targetChatId, text: msg60, parse_mode: 'Markdown' })
             .catch(e => console.log('Error sending 60m reminder:', e.message));
         }
 
@@ -229,7 +244,7 @@ function startReminderScheduler() {
 `*${booking.clientName}*, мастер *${booking.barberName}* уже подготовил кресло и стерильные инструменты к вашему визиту в *${booking.time}*.\n\n` +
 `Добро пожаловать в Gravity Barber Lounge!`;
 
-          botInstance.sendMessage(targetChatId, msg5, { parse_mode: 'Markdown' })
+          tgCall('sendMessage', { chat_id: targetChatId, text: msg5, parse_mode: 'Markdown' })
             .catch(e => console.log('Error sending 5m reminder:', e.message));
         }
       });
@@ -240,25 +255,17 @@ function startReminderScheduler() {
     } catch (e) {
       console.error('[Reminder Scheduler] error:', e.message);
     }
-  }, 40000);
+  }, 35000);
 }
 
-// Manual reminder trigger from Admin Dashboard
+// Manual reminder from admin
 export async function sendManualBookingReminder(bookingId) {
-  if (!botInstance) {
-    throw new Error('Telegram бот не инициализирован.');
-  }
-
   const db = readDb();
   const booking = db.bookings.find(b => b.id === bookingId);
-  if (!booking) {
-    throw new Error('Запись не найдена.');
-  }
+  if (!booking) throw new Error('Запись не найдена.');
 
   const targetChatId = booking.telegramChatId || db.settings.telegramAdminChatId;
-  if (!targetChatId) {
-    throw new Error('У этой записи не указан Telegram Chat ID и не настроен Admin Chat ID.');
-  }
+  if (!targetChatId) throw new Error('У этой записи не указан Telegram Chat ID.');
 
   const text = 
 `🔔 *ПЕРСОНАЛЬНОЕ НАПОМИНАНИЕ О ЗАПИСИ* 🔔\n\n` +
@@ -269,9 +276,10 @@ export async function sendManualBookingReminder(bookingId) {
 `✂️ *Услуга:* ${booking.serviceName}\n` +
 `🧔 *Мастер:* ${booking.barberName}\n` +
 `📍 *Адрес:* ул. Большая Бронная, 14 (м. Пушкинская)\n\n` +
-`Если ваши планы изменились, пожалуйста, сообщите нам по телефону: ${db.settings.salonPhone}`;
+`Если ваши планы изменились, пожалуйста, свяжитесь с нами: ${db.settings.salonPhone}`;
 
-  await botInstance.sendMessage(targetChatId, text, { parse_mode: 'Markdown' });
+  const res = await tgCall('sendMessage', { chat_id: targetChatId, text, parse_mode: 'Markdown' });
+  if (!res.ok) throw new Error(res.description || 'Ошибка отправки в Telegram');
   return true;
 }
 
@@ -284,7 +292,9 @@ function startBotBooking(chatId) {
     callback_data: `sel_srv_${s.id}`
   }]));
 
-  botInstance.sendMessage(chatId, "💈 *Шаг 1 из 4:* Выберите услугу:", {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: "💈 *Шаг 1 из 4:* Выберите услугу:",
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: buttons }
   });
@@ -309,7 +319,9 @@ function handleServiceSelect(chatId, serviceId) {
 
   buttons.push([{ text: "⚡ Любой свободный мастер", callback_data: "sel_barber_any" }]);
 
-  botInstance.sendMessage(chatId, `Вы выбрали: *${service.name}*\n\n✂️ *Шаг 2 из 4:* Выберите мастера:`, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: `Вы выбрали: *${service.name}*\n\n✂️ *Шаг 2 из 4:* Выберите мастера:`,
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: buttons }
   });
@@ -333,7 +345,6 @@ function handleBarberSelect(chatId, barberId) {
   state.step = 'select_date';
   userStates.set(chatId, state);
 
-  // Today, tomorrow, day after
   const today = new Date();
   const dates = [];
   for (let i = 0; i < 4; i++) {
@@ -344,7 +355,9 @@ function handleBarberSelect(chatId, barberId) {
     dates.push([{ text: `📅 ${label} (${dateStr})`, callback_data: `sel_date_${dateStr}` }]);
   }
 
-  botInstance.sendMessage(chatId, `Мастер: *${state.barberName}*\n\n📅 *Шаг 3 из 4:* Выберите дату визита:`, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: `Мастер: *${state.barberName}*\n\n📅 *Шаг 3 из 4:* Выберите дату визита:`,
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: dates }
   });
@@ -358,7 +371,6 @@ function handleDateSelect(chatId, dateStr) {
   state.date = dateStr;
   userStates.set(chatId, state);
 
-  // Available slots
   const slots = ["11:00", "12:30", "14:00", "15:30", "17:00", "18:30", "20:00"];
   const db = readDb();
   const bookedTimes = db.bookings
@@ -381,7 +393,9 @@ function handleDateSelect(chatId, dateStr) {
     rows.push([{ text: "Записаться на 19:30", callback_data: "sel_time_19:30" }]);
   }
 
-  botInstance.sendMessage(chatId, `Дата: *${dateStr}*\n\n⏰ *Шаг 4 из 4:* Выберите удобное время:`, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: `Дата: *${dateStr}*\n\n⏰ *Шаг 4 из 4:* Выберите удобное время:`,
     parse_mode: 'Markdown',
     reply_markup: { inline_keyboard: rows }
   });
@@ -395,12 +409,12 @@ function handleTimeSelect(chatId, timeStr) {
   state.time = timeStr;
   userStates.set(chatId, state);
 
-  botInstance.sendMessage(chatId, 
-    `Почти готово! Оставьте ваш контактный номер телефона для подтверждения записи.\n\n` +
-    `_Отправьте номер в ответном сообщении (например: +79991234567):_`, {
-      parse_mode: 'Markdown'
-    }
-  );
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: `Почти готово! Оставьте ваш контактный номер телефона для подтверждения записи.\n\n` +
+          `_Отправьте номер в ответном сообщении (например: +79991234567):_`,
+    parse_mode: 'Markdown'
+  });
 }
 
 function finishBotBooking(chatId, phone, clientName) {
@@ -433,7 +447,9 @@ function finishBotBooking(chatId, phone, clientName) {
   userStates.delete(chatId);
 
   // Notify client
-  botInstance.sendMessage(chatId, 
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text: 
 `✅ *Поздравляем! Ваша запись успешно создана!*
 
 🔖 *Номер брони:* \`${bookingId}\`
@@ -444,7 +460,7 @@ function finishBotBooking(chatId, phone, clientName) {
 ⏰ *Время:* ${state.time}
 📞 *Телефон:* ${phone}
 
-Ждем вас в *GRAVITY BARBERSHOP*! Мы приготовим для вас отличный кофе или виски.`, {
+Ждем вас в *GRAVITY BARBERSHOP*! Мы приготовим для вас отличный кофе или виски.`,
     parse_mode: 'Markdown'
   });
 
@@ -460,7 +476,9 @@ function showServicesList(chatId) {
     text += `• *${s.name}* — ${s.price} ₽ (${s.duration} мин)\n_${s.description}_\n\n`;
   });
 
-  botInstance.sendMessage(chatId, text, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text,
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [[{ text: "📅 Записаться прямо сейчас", callback_data: "start_booking" }]]
@@ -479,7 +497,9 @@ function showBarbersList(chatId) {
             `Часы работы: ${b.startTime} - ${b.endTime}\n\n`;
   });
 
-  botInstance.sendMessage(chatId, text, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text,
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [[{ text: "📅 Записаться к мастеру", callback_data: "start_booking" }]]
@@ -499,7 +519,9 @@ function showContacts(chatId) {
 🚇 Ближайшие станции метро: Тверская, Пушкинская, Маяковская (3 мин пешком).
 🚗 Бесплатная гостевая парковка по предварительному звонку.`;
 
-  botInstance.sendMessage(chatId, text, {
+  tgCall('sendMessage', {
+    chat_id: chatId,
+    text,
     parse_mode: 'Markdown',
     reply_markup: {
       inline_keyboard: [[{ text: "📅 Записаться", callback_data: "start_booking" }]]
@@ -512,7 +534,9 @@ function showUserBookings(chatId, userId) {
   const userBookings = db.bookings.filter(b => b.telegramChatId === chatId || b.telegramChatId === userId);
 
   if (userBookings.length === 0) {
-    botInstance.sendMessage(chatId, "У вас пока нет активных записей через Telegram. Нажмите кнопку ниже, чтобы записаться!", {
+    tgCall('sendMessage', {
+      chat_id: chatId,
+      text: "У вас пока нет активных записей через Telegram. Нажмите кнопку ниже, чтобы записаться!",
       reply_markup: {
         inline_keyboard: [[{ text: "📅 Записаться онлайн", callback_data: "start_booking" }]]
       }
@@ -529,7 +553,7 @@ function showUserBookings(chatId, userId) {
             `📅 ${b.date} в ${b.time}\n\n`;
   });
 
-  botInstance.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  tgCall('sendMessage', { chat_id: chatId, text, parse_mode: 'Markdown' });
 }
 
 function updateBookingStatus(bookingId, newStatus, adminChatId, messageId) {
@@ -549,35 +573,34 @@ function updateBookingStatus(bookingId, newStatus, adminChatId, messageId) {
 `✂️ Услуга: *${booking.serviceName}* (${booking.servicePrice} ₽)\n` +
 `🧔 Мастер: *${booking.barberName}*\n` +
 `📅 Дата и время: *${booking.date} в ${booking.time}*\n` +
-`🌐 Источник: ${booking.source === 'website' ? 'Сайт' : 'Telegram Bot'}`;
+`🌐 Источник: ${booking.source === 'website' ? 'Сайт' : 'Telegram Bot / Mini App'}`;
 
-  botInstance.editMessageText(updatedMsg, {
+  tgCall('editMessageText', {
     chat_id: adminChatId,
     message_id: messageId,
+    text: updatedMsg,
     parse_mode: 'Markdown'
   });
 
-  // Notify client if they booked via telegram
   if (booking.telegramChatId) {
     const clientNote = newStatus === 'confirmed'
       ? `🎉 Ваша запись *#${booking.id}* подтверждена администратором! Ждем вас ${booking.date} в ${booking.time}.`
       : `⚠️ Ваша запись *#${booking.id}* была отменена. Пожалуйста, выберите другое время или свяжитесь с нами.`;
 
-    try {
-      botInstance.sendMessage(booking.telegramChatId, clientNote, { parse_mode: 'Markdown' });
-    } catch (e) {
-      console.log('Could not notify client on TG:', e.message);
-    }
+    tgCall('sendMessage', {
+      chat_id: booking.telegramChatId,
+      text: clientNote,
+      parse_mode: 'Markdown'
+    }).catch(e => console.log('Could not notify client on TG:', e.message));
   }
 }
 
-// Send real-time notification to the Admin Telegram Chat
 export async function sendBookingNotification(booking) {
   const db = readDb();
   const chatId = db.settings.telegramAdminChatId;
 
-  if (!botInstance || !chatId || chatId.trim() === '') {
-    console.log('[Telegram Bot] Cannot send booking notification: bot not initialized or adminChatId missing.');
+  if (!chatId || chatId.trim() === '') {
+    console.log('[Telegram Bot] Cannot send booking notification: adminChatId missing.');
     return false;
   }
 
@@ -605,29 +628,36 @@ export async function sendBookingNotification(booking) {
   };
 
   try {
-    await botInstance.sendMessage(chatId, text, {
+    const res = await tgCall('sendMessage', {
+      chat_id: chatId,
+      text,
       parse_mode: 'Markdown',
       reply_markup: keyboard
     });
-    console.log(`[Telegram Bot] Notification sent for booking ${booking.id} to chat ${chatId}`);
-    return true;
+    console.log(`[Telegram Bot] Notification sent for booking ${booking.id} to chat ${chatId}:`, res.ok);
+    return res.ok;
   } catch (err) {
     console.error('[Telegram Bot] Error sending notification:', err.message);
     return false;
   }
 }
 
-// Send test message from Admin Panel
 export async function sendTestNotification(chatId) {
-  if (!botInstance) {
-    throw new Error('Телеграм бот не запущен. Сначала сохраните корректный Bot Token.');
-  }
-
   const text = 
 `⚡ *ТЕСТОВОЕ УВЕДОМЛЕНИЕ УСПЕШНО ДОСТАВЛЕНО!* ⚡\n\n` +
 `Барбершоп: *Gravity Barber Lounge*\n` +
+`Бот: *@gravity_barber_bot*\n` +
 `Связь сайта, админ-панели и Telegram чата (ID: \`${chatId}\`) настроена корректно!\n\n` +
 `Теперь все заявки клиентов с интерактивного календаря на сайте и из Telegram Mini App будут моментально приходить в этот чат с кнопками подтверждения.`;
 
-  return await botInstance.sendMessage(chatId, text, { parse_mode: 'Markdown' });
+  const res = await tgCall('sendMessage', {
+    chat_id: chatId,
+    text,
+    parse_mode: 'Markdown'
+  });
+
+  if (!res.ok) {
+    throw new Error(res.description || 'Не удалось отправить сообщение в Telegram');
+  }
+  return res;
 }
