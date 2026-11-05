@@ -30,7 +30,7 @@ export function initTelegramBot(token, adminChatId) {
   pollingActive = true;
 
   // Set chat menu button for Telegram Mini App
-  const webAppUrl = process.env.WEBAPP_URL || 'https://gravity-barber.vercel.app';
+  const webAppUrl = process.env.WEBAPP_URL || 'https://project-gravity-barber.vercel.app';
   tgCall('setChatMenuButton', {
     menu_button: {
       type: 'web_app',
@@ -71,7 +71,7 @@ async function startLongPolling() {
 }
 
 async function handleUpdate(update) {
-  const webAppUrl = process.env.WEBAPP_URL || 'https://gravity-barber.vercel.app';
+  const webAppUrl = process.env.WEBAPP_URL || 'https://project-gravity-barber.vercel.app';
 
   // 1. Message received
   if (update.message) {
